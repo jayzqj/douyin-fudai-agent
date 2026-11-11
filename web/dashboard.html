@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抖音福袋 · 看板</title>
+<style>
+body{margin:0;background:#0f1115;color:#e8eaf0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;font-size:14px}
+a{color:#6ea8fe;text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:16px}
+.top{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+.top h1{font-size:20px;margin:0}
+.dim{color:#9aa0ae;font-size:12px}
+.badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#1c2333;font-size:12px;margin-right:6px}
+.badge.ok{color:#3ddc84}.badge.bad{color:#ff6b6b}
+.kpi{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}
+.kpi>div{background:#171b24;border:1px solid #262c3a;border-radius:10px;padding:12px}
+.kpi .num{font-size:26px;font-weight:700}
+.kpi .lbl{color:#9aa0ae;font-size:12px;margin-top:2px}
+.layout{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:14px;align-items:start}
+.left,.right{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:#171b24;border:1px solid #262c3a;border-radius:10px;padding:14px;margin-bottom:0}
+.scroll{max-height:520px;overflow:auto}
+.scroll-sm{max-height:300px;overflow:auto}
+thead th{position:sticky;top:0;background:#171b24;z-index:1}
+@media (max-width:900px){.layout{grid-template-columns:minmax(0,1fr)}.scroll{max-height:380px}}
+.card h2{font-size:16px;margin:0 0 4px}
+.card p{color:#9aa0ae;font-size:12px;margin:4px 0 10px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 6px;border-bottom:1px solid #262c3a;text-align:left;vertical-align:top}
+th{color:#9aa0ae;font-weight:600;white-space:nowrap}
+td.num{white-space:nowrap}
+.cd{font-weight:700;color:#ffd166;white-space:nowrap}
+.empty{color:#9aa0ae;padding:12px 0}
+.btn{background:#2a3348;color:#fff;border:0;border-radius:8px;padding:7px 14px;cursor:pointer;font-size:13px}
+.btn:hover{background:#36415e}
+input,textarea,select{background:#0f1115;color:#e8eaf0;border:1px solid #333c52;border-radius:6px;padding:6px 8px;font-size:13px}
+input[type=checkbox]{width:auto}
+label{font-size:13px;margin-right:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:#c8cdd8}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>抖音福袋 · 看板</h1>
+    <span class="dim" id="ts">加载中…</span>
+    <span>
+      <span class="badge" id="b-run">抓取：—</span>
+      <span class="badge" id="b-login">登录：—</span>
+    </span>
+  </div>
+
+  <div class="kpi">
+    <div><div class="num" id="s-total">-</div><div class="lbl">今日遭遇福袋</div></div>
+    <div><div class="num" id="s-joined" style="color:#3ddc84">-</div><div class="lbl">今日参与成功</div></div>
+    <div><div class="num" id="s-wins" style="color:#ffd166">-</div><div class="lbl">今日中奖</div></div>
+    <div><div class="num" id="s-active" style="color:#6ea8fe">-</div><div class="lbl">正在发福袋的直播间</div></div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin:0">
+      <button class="btn" data-act="start">启动</button>
+      <button class="btn" data-act="stop">停止</button>
+      <button class="btn" data-act="restart">重启</button>
+      <span id="act-msg" class="dim">就绪</span>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="left">
+  <div class="card">
+    <h2>正在发福袋</h2>
+    <p>抓取程序最近一次扫描到福袋图标的房间。倒计时是按发现时间算的，每秒更新；“福袋内容”要等程序点开面板后才有，没点开时会写“待打开面板确认”。</p>
+    <div id="active-empty" class="empty">当前没有正在发福袋的房间，抓取程序正在巡房…</div>
+    <table id="active-table" style="display:none">
+      <thead><tr><th>直播间</th><th>在线</th><th>福袋内容</th><th>类型</th><th>倒计时</th><th>状态</th><th>链接</th></tr></thead>
+      <tbody id="active-body"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>所有监控过的直播间</h2>
+    <p>抓取程序采集到过的所有房间，按“上次看到”倒序。发过福袋的次数、访问次数来自主播档案，会越跑越准。</p>
+    <div class="row">
+      <input id="q" placeholder="搜主播名 / 标题 / 房间号" style="flex:1;min-width:200px">
+      <label><input type="checkbox" id="only-fudai"> 只看发过福袋的</label>
+      <span class="dim" id="rooms-count"></span>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>直播间</th><th>在线</th><th>发福袋</th><th>可抢</th><th>访问</th><th>上次看到</th><th>状态</th><th>链接</th></tr></thead>
+      <tbody id="rooms-body"></tbody>
+    </table></div>
+    <div id="rooms-empty" class="empty" style="display:none">还没有监控过的房间。先确认抓取程序在运行，等一轮采集（约 1–2 分钟）再刷新。</div>
+  </div>
+    </div>
+    <div class="right">
+  <div class="card">
+    <h2>今日参与记录</h2>
+    <p>今天程序实际去抢过的福袋，按时间倒序。点房间号可以打开直播间。</p>
+    <div id="events" class="scroll-sm" style="overflow:auto"></div>
+  </div>
+
+  <div class="card">
+    <h2>设置 · 只盯婴童用品</h2>
+    <p>只保留标题或主播名含关键词的直播间；改完点保存，再点上面的“重启”让抓取生效。关键词用逗号分隔。</p>
+    <div class="row">
+      <label>只盯婴童 <input type="checkbox" id="cfg-enabled" checked></label>
+      <label>无门槛（不分白天晚间） <input type="checkbox" id="cfg-no-threshold" checked></label>
+      <label>人数越少越优先 <input type="checkbox" id="cfg-small" checked></label>
+      <label>只抢关注/弹幕型（跳过粉丝团） <input type="checkbox" id="cfg-skip-fans" checked></label>
+    </div>
+    <div class="row">
+      <label>加分 <input id="cfg-bonus" type="number" value="20" min="0" max="50" style="width:64px"></label>
+      <label>白天门槛 <input id="cfg-day" type="number" value="100" style="width:80px"></label>
+      <label>晚间门槛 <input id="cfg-night" type="number" value="20000" style="width:80px"></label>
+    </div>
+    <div style="margin-top:8px;font-size:13px">关键词</div>
+    <textarea id="cfg-keywords" rows="2" style="width:100%;box-sizing:border-box">母婴,婴童,宝宝,婴儿,奶粉,纸尿裤,尿不湿,童装,童鞋,辅食,婴儿车,儿童,妈妈,宝妈,孕妇,育儿,亲子</textarea>
+    <div style="margin-top:8px;font-size:13px">指定主播（每行一个：抖音号,名字,开播小时…，例如 xiaolumu,小鹿母婴,20）</div>
+    <textarea id="cfg-pinned" rows="3" style="width:100%;box-sizing:border-box"></textarea>
+    <div class="row">
+      <button class="btn" id="btn-cfg-save">保存设置</button>
+      <button class="btn" id="btn-cfg-reload">重新读取</button>
+      <span id="cfg-msg" class="dim"></span>
+    </div>
+  </div>
+    </div>
+  </div>
+
+  <details class="card">
+    <summary style="cursor:pointer">最近日志（点开看）</summary>
+    <pre id="log">加载中…</pre>
+  </details>
+</div>
+
+<script>
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmtOnline(n){ if(n==null||n<0) return '-'; return Number(n).toLocaleString(); }
+function ago(ts){
+  if(!ts) return '-';
+  var d=Math.max(0, Math.round((Date.now()-ts)/1000));
+  if(d<60) return d+' 秒前';
+  if(d<3600) return Math.floor(d/60)+' 分钟前';
+  return Math.floor(d/3600)+' 小时前';
+}
+function fmtCd(sec){
+  if(sec==null||sec<0) return '-';
+  var m=Math.floor(sec/60), s=sec%60;
+  return (m<10?'0':'')+m+':'+(s<10?'0':'')+s;
+}
+function resultLabel(r){
+  var m={'joined':'参与成功','maybe-joined':'参与成功（待确认）','need-follow':'需关注','fans-skip-always':'粉丝团·已跳过','fans-skip-daytime':'粉丝团·白天跳过','fans-skip-account':'粉丝团·账号跳过','fans-no-coins':'粉丝团·抖币不足','packet-skipped':'人气红包·不抢','packet-only':'人气红包','no-panel':'未打开面板'};
+  return m[r]||r||'-';
+}
+function roomLink(room){ return 'https://live.douyin.com/'+room; }
+function roomCell(r){
+  var name=esc(r.host||r.room);
+  var title=r.title?'<div class="dim">'+esc(r.title)+'</div>':'';
+  return '<div>'+name+'</div>'+title+'<div class="dim">'+esc(r.room)+'</div>';
+}
+var lastData=null;
+function render(){
+  if(!lastData) return;
+  var d=lastData, live=d.live||{rooms:[],active:[]};
+  document.getElementById('ts').textContent='每 5 秒刷新 · '+new Date().toLocaleString();
+  document.getElementById('s-total').textContent=(d.stats&&d.stats.todayTotal!=null)?d.stats.todayTotal:'-';
+  document.getElementById('s-joined').textContent=(d.stats&&d.stats.todayJoined!=null)?d.stats.todayJoined:'-';
+  document.getElementById('s-wins').textContent=(d.stats&&d.stats.wins!=null)?d.stats.wins:'-';
+  document.getElementById('s-active').textContent=live.active.length;
+  var running=(d.procs&&d.procs.length>0);
+  var bRun=document.getElementById('b-run');
+  bRun.textContent='抓取：'+(running?'运行中':'未运行');
+  bRun.className='badge '+(running?'ok':'bad');
+  var bLogin=document.getElementById('b-login');
+  var hasLogin=d.accounts&&d.accounts.some(function(a){return a.hasLogin;});
+  bLogin.textContent='登录：'+(hasLogin?'已登录':'未登录/未知');
+  bLogin.className='badge '+(hasLogin?'ok':'');
+  // 正在发福袋
+  var ab=document.getElementById('active-body');
+  var now=Date.now();
+  var act=live.active.filter(function(r){ return r.fudai && r.fudai.expiresAt && r.fudai.expiresAt>now; });
+  document.getElementById('active-table').style.display=act.length?'':'none';
+  document.getElementById('active-empty').style.display=act.length?'none':'';
+  ab.innerHTML=act.map(function(r){
+    var f=r.fudai||{};
+    var sec=f.expiresAt?Math.max(0,Math.round((f.expiresAt-now)/1000)):-1;
+    var content=f.content?esc(f.content):'待打开面板确认';
+    var status=r.status==='joined'?'参与成功':(f.type||'待确认');
+    return '<tr><td>'+roomCell(r)+'</td><td class="num">'+fmtOnline(r.online)+'</td><td>'+content+'</td><td>'+esc(f.type||'待确认')+'</td><td class="cd" data-expires="'+(f.expiresAt||'')+'">'+fmtCd(sec)+'</td><td>'+esc(status)+'</td><td><a href="'+roomLink(r.room)+'" target="_blank" rel="noopener">打开直播间</a></td></tr>';
+  }).join('');
+  // 所有监控过的房间
+  var q=(document.getElementById('q').value||'').trim().toLowerCase();
+  var onlyF=document.getElementById('only-fudai').checked;
+  var rooms=(live.rooms||[]).filter(function(r){
+    if(onlyF && !(r.fudaiTotal>0)) return false;
+    if(!q) return true;
+    return ((r.host||'')+' '+(r.title||'')+' '+(r.room||'')).toLowerCase().indexOf(q)>=0;
+  });
+  document.getElementById('rooms-count').textContent='共 '+rooms.length+' 间';
+  document.getElementById('rooms-empty').style.display=rooms.length?'none':'';
+  document.getElementById('rooms-body').innerHTML=rooms.slice(0,100).map(function(r){
+    var st=r.status==='fudai'?'正在发福袋':(r.status==='joined'?'已参与':(r.fudaiTotal>0?'发过福袋':'监控中'));
+    return '<tr><td>'+roomCell(r)+'</td><td class="num">'+fmtOnline(r.online)+'</td><td class="num">'+(r.fudaiTotal||0)+'</td><td class="num">'+(r.joinable||0)+'</td><td class="num">'+(r.visits||0)+'</td><td>'+ago(r.lastSeenTs)+'</td><td>'+esc(st)+'</td><td><a href="'+roomLink(r.room)+'" target="_blank" rel="noopener">打开直播间</a></td></tr>';
+  }).join('');
+  // 今日参与记录
+  var evs=d.recentEvents||[];
+  document.getElementById('events').innerHTML=evs.length?evs.map(function(e){
+    var t=e.at?new Date(e.at).toLocaleTimeString():'';
+    return '<div style="padding:6px 0;border-bottom:1px solid #262c3a">'+t+' · <a href="'+roomLink(e.room)+'" target="_blank" rel="noopener">'+esc(e.roomName||e.room)+'</a> · '+esc(resultLabel(e.result))+' · 在线 '+fmtOnline(e.online)+'</div>';
+  }).join(''):'<div class="empty">今天还没有参与记录。</div>';
+  document.getElementById('log').textContent=d.logTail||'暂无日志';
+}
+// 倒计时每秒本地递减，不用等 5 秒刷新
+setInterval(function(){
+  var els=document.querySelectorAll('.cd[data-expires]');
+  var now=Date.now();
+  els.forEach(function(el){
+    var exp=Number(el.getAttribute('data-expires'));
+    el.textContent=exp?fmtCd(Math.max(0,Math.round((exp-now)/1000))):'-';
+  });
+},1000);
+async function tick(){
+  try{
+    var r=await fetch('/api/status');
+    lastData=await r.json();
+    render();
+  }catch(e){ document.getElementById('ts').textContent='刷新失败：'+e.message; }
+}
+document.querySelectorAll('[data-act]').forEach(function(b){
+  b.addEventListener('click', async function(){
+    var msg=document.getElementById('act-msg'); msg.textContent='执行中…';
+    try{
+      var r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:b.getAttribute('data-act')})});
+      var d=await r.json(); msg.textContent=d.ok?(d.output||'已执行'):'失败：'+(d.error||'');
+    }catch(e){ msg.textContent='失败：'+e.message; }
+    setTimeout(tick,2000);
+  });
+});
+async function loadCfg(){
+  try{
+    var r=await fetch('/api/config'); var d=await r.json();
+    document.getElementById('cfg-enabled').checked=d.categoryFilter.enabled!==false;
+    document.getElementById('cfg-no-threshold').checked=d.categoryFilter.noThreshold!==false;
+    document.getElementById('cfg-small').checked=d.categoryFilter.preferSmallRooms!==false;
+    document.getElementById('cfg-skip-fans').checked=d.categoryFilter.skipFansGroup!==false;
+    document.getElementById('cfg-bonus').value=d.categoryFilter.bonus||20;
+    document.getElementById('cfg-keywords').value=(d.categoryFilter.keywords||[]).join(',');
+    document.getElementById('cfg-day').value=d.threshold.day;
+    document.getElementById('cfg-night').value=d.threshold.night;
+    var pinned=d.pinned||{};
+    document.getElementById('cfg-pinned').value=Object.entries(pinned).map(function(e){ return e[0]+','+(e[1].name||'')+','+((e[1].hours||[]).join(',')); }).join('\n');
+  }catch(e){ document.getElementById('cfg-msg').textContent='读取设置失败'; }
+}
+document.getElementById('btn-cfg-reload').addEventListener('click',loadCfg);
+document.getElementById('btn-cfg-save').addEventListener('click',async function(){
+  var msg=document.getElementById('cfg-msg'); msg.textContent='保存中…';
+  try{
+    var r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      categoryFilter:{enabled:document.getElementById('cfg-enabled').checked,mode:document.getElementById('cfg-enabled').checked?'only':'off',keywords:document.getElementById('cfg-keywords').value,bonus:Number(document.getElementById('cfg-bonus').value)||20,noThreshold:document.getElementById('cfg-no-threshold').checked,preferSmallRooms:document.getElementById('cfg-small').checked,skipFansGroup:document.getElementById('cfg-skip-fans').checked},
+      threshold:{day:Number(document.getElementById('cfg-day').value),night:Number(document.getElementById('cfg-night').value)},
+      pinned:document.getElementById('cfg-pinned').value
+    })});
+    var d=await r.json();
+    msg.textContent=d.ok?'已保存，点上面“重启”让抓取生效':'保存失败：'+(d.error||'');
+  }catch(e){ msg.textContent='保存失败：'+e.message; }
+});
+document.getElementById('q').addEventListener('input',render);
+document.getElementById('only-fudai').addEventListener('change',render);
+loadCfg();
+tick();
+setInterval(tick,5000);
+</script>
+</body>
+</html>

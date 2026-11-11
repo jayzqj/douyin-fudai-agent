@@ -70,6 +70,70 @@ const PATHS = {
   roundCounter: path.join(ROOT, 'douyin-auto', 'round-counter.txt'),
 };
 
+// 🧒 婴童过滤 + 门槛 + 指定主播：网页设置用，单一数据源与抓取侧共用。
+function readLive(){
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'live-rooms.json'), 'utf8')) || {};
+    return { updatedAt: j.updatedAt || '', updatedTs: j.updatedTs || 0, rooms: Array.isArray(j.rooms) ? j.rooms : [], active: Array.isArray(j.active) ? j.active : [] };
+  } catch { return { updatedAt: '', updatedTs: 0, rooms: [], active: [] }; }
+}
+function readJsonFile(p, fallback){
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')) || fallback; } catch { return fallback; }
+}
+function writeJsonFile(p, obj){
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  const tmp = p + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2), 'utf8');
+  fs.renameSync(tmp, p);
+}
+function readConfig(){
+  const categoryFilter = readJsonFile(path.join(ROOT, 'data', 'category-filter.json'), { enabled: true, mode: 'only', keywords: ['母婴','婴童','宝宝','婴儿','奶粉','纸尿裤','尿不湿','童装','童鞋','辅食','婴儿车','儿童','妈妈','宝妈','孕妇','育儿','亲子'], bonus: 20, noThreshold: true, preferSmallRooms: true, skipFansGroup: true });
+  const threshold = readJsonFile(path.join(ROOT, 'data', 'threshold.json'), { day: 8000, night: 50000, nightStart: 19, nightEnd: 24 });
+  const pinned = readJsonFile(path.join(ROOT, 'data', 'pinned-hosts.json'), {});
+  return { categoryFilter, threshold, pinned };
+}
+function writeConfig(body){
+  if (body.categoryFilter) {
+    const cf = body.categoryFilter;
+    const keywords = Array.isArray(cf.keywords) ? cf.keywords.map(x => String(x || '').trim()).filter(Boolean)
+      : String(cf.keywords || '').split(/[,，、\n]/).map(x => x.trim()).filter(Boolean);
+    if (!keywords.length) throw new Error('关键词不能为空，至少填一个');
+    if (keywords.length > 40) throw new Error('关键词最多 40 个');
+    writeJsonFile(path.join(ROOT, 'data', 'category-filter.json'), {
+      enabled: cf.enabled !== false,
+      mode: cf.mode === 'off' ? 'off' : 'only',
+      keywords,
+      bonus: Math.max(0, Math.min(50, Number(cf.bonus) || 20)),
+      noThreshold: cf.noThreshold !== false,
+      preferSmallRooms: cf.preferSmallRooms !== false,
+      skipFansGroup: cf.skipFansGroup !== false,
+    });
+  }
+  if (body.threshold) {
+    const t = body.threshold;
+    const day = Number(t.day), night = Number(t.night);
+    if (!Number.isFinite(day) || day < 0 || !Number.isFinite(night) || night < 0) throw new Error('门槛必须是大于等于 0 的数字');
+    const cur = readJsonFile(path.join(ROOT, 'data', 'threshold.json'), {});
+    writeJsonFile(path.join(ROOT, 'data', 'threshold.json'), { ...cur, day, night, nightStart: Number(t.nightStart) || 19, nightEnd: Number(t.nightEnd) || 24 });
+  }
+  if (body.pinned) {
+    // 前端传两种格式都认：对象 {抖音号:{name,hours,tier}} 或文本行 "抖音号,名字,20,21"
+    let pinned = {};
+    if (typeof body.pinned === 'string') {
+      for (const line of body.pinned.split('\n')) {
+        const parts = line.split(',').map(x => x.trim()).filter(Boolean);
+        if (parts.length < 2) continue;
+        const hours = parts.slice(2).map(x => Number(x)).filter(x => Number.isFinite(x) && x >= 0 && x < 24);
+        pinned[parts[0]] = { name: parts[1], hours, tier: 'pinned' };
+      }
+    } else if (body.pinned && typeof body.pinned === 'object') {
+      pinned = body.pinned;
+    }
+    writeJsonFile(path.join(ROOT, 'data', 'pinned-hosts.json'), pinned);
+  }
+  return readConfig();
+}
+
 function readJsonl(p) {
   const out = [];
   if (!fs.existsSync(p)) return out;
@@ -493,6 +557,7 @@ function buildStatus() {
 
   return {
     now: new Date().toISOString(),
+    live: readLive(),
     procs, ports,
     instances: instancesInfo(procs, (() => {
       const m = {};
@@ -1054,6 +1119,29 @@ const HTML = `<!DOCTYPE html>
   </div>
 </div>
 
+<div class="card" style="margin-top:10px">
+  <h2>设置 · 只盯婴童用品</h2>
+  <div style="font-size:12px;color:var(--dim);margin-bottom:8px">只保留标题或主播名含关键词的直播间；改完点保存，再点下面的“重启”让抓取生效。关键词用逗号分隔。</div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+    <label style="font-size:12px">只盯婴童 <input type="checkbox" id="cfg-enabled" checked style="width:auto"></label>
+    <label style="font-size:12px">无门槛（不分白天晚间） <input type="checkbox" id="cfg-no-threshold" checked style="width:auto"></label>
+    <label style="font-size:12px">人数越少越优先 <input type="checkbox" id="cfg-small" checked style="width:auto"></label>
+    <label style="font-size:12px">只抢关注/弹幕型（跳过粉丝团） <input type="checkbox" id="cfg-skip-fans" checked style="width:auto"></label>
+    <label style="font-size:12px">加分 <input id="cfg-bonus" type="number" value="20" min="0" max="50" style="width:64px"></label>
+    <label style="font-size:12px">白天门槛 <input id="cfg-day" type="number" value="8000" style="width:80px"></label>
+    <label style="font-size:12px">晚间门槛 <input id="cfg-night" type="number" value="50000" style="width:80px"></label>
+  </div>
+  <div style="margin-top:8px;font-size:12px">关键词</div>
+  <textarea id="cfg-keywords" rows="2" style="width:100%;box-sizing:border-box">母婴,婴童,宝宝,婴儿,奶粉,纸尿裤,尿不湿,童装,童鞋,辅食,婴儿车,儿童,妈妈,宝妈,孕妇,育儿,亲子</textarea>
+  <div style="margin-top:8px;font-size:12px">指定主播（每行一个：抖音号,名字,开播小时…，例如 dehua66888,吕德华,20）</div>
+  <textarea id="cfg-pinned" rows="3" style="width:100%;box-sizing:border-box"></textarea>
+  <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+    <button class="btn" id="btn-cfg-save">保存设置</button>
+    <button class="btn" id="btn-cfg-reload">重新读取</button>
+    <span id="cfg-msg" class="dim" style="font-size:11px"></span>
+  </div>
+</div>
+
 <div class="bottom">
   <div class="card tl-card">
     <div style="flex:1;min-width:0">
@@ -1503,6 +1591,38 @@ document.getElementById('btn-acc-add').addEventListener('click', async function 
   }
 });
 
+async function loadCfg(){
+  try{
+    const r = await fetch('/api/config');
+    const d = await r.json();
+    document.getElementById('cfg-enabled').checked = d.categoryFilter.enabled !== false;
+    document.getElementById('cfg-no-threshold').checked = d.categoryFilter.noThreshold !== false;
+    document.getElementById('cfg-small').checked = d.categoryFilter.preferSmallRooms !== false;
+    document.getElementById('cfg-skip-fans').checked = d.categoryFilter.skipFansGroup !== false;
+    document.getElementById('cfg-bonus').value = d.categoryFilter.bonus || 20;
+    document.getElementById('cfg-keywords').value = (d.categoryFilter.keywords || []).join(',');
+    document.getElementById('cfg-day').value = d.threshold.day;
+    document.getElementById('cfg-night').value = d.threshold.night;
+    const pinned = d.pinned || {};
+    document.getElementById('cfg-pinned').value = Object.entries(pinned).map(function(e){ return e[0] + ',' + (e[1].name || '') + ',' + ((e[1].hours || []).join(',')); }).join('\n');
+  }catch(e){ document.getElementById('cfg-msg').textContent = '读取设置失败'; }
+}
+document.getElementById('btn-cfg-reload').addEventListener('click', loadCfg);
+document.getElementById('btn-cfg-save').addEventListener('click', async function(){
+  const msg = document.getElementById('cfg-msg');
+  msg.textContent = '保存中…';
+  try{
+    const r = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+      categoryFilter: { enabled: document.getElementById('cfg-enabled').checked, mode: document.getElementById('cfg-enabled').checked ? 'only' : 'off', keywords: document.getElementById('cfg-keywords').value, bonus: Number(document.getElementById('cfg-bonus').value) || 20, noThreshold: document.getElementById('cfg-no-threshold').checked, preferSmallRooms: document.getElementById('cfg-small').checked, skipFansGroup: document.getElementById('cfg-skip-fans').checked },
+      threshold: { day: Number(document.getElementById('cfg-day').value), night: Number(document.getElementById('cfg-night').value) },
+      pinned: document.getElementById('cfg-pinned').value
+    })});
+    const d = await r.json();
+    if(!d.ok){ msg.textContent = '保存失败：' + (d.error || ''); return; }
+    msg.textContent = '已保存，点下面“重启”让抓取生效';
+  }catch(e){ msg.textContent = '保存失败：' + e.message; }
+});
+loadCfg();
 tick();
 setInterval(tick, 15000);
 </script>
@@ -1603,6 +1723,32 @@ const server = http.createServer((req, res) => {
     res.end(ICON_SVG);
     return;
   }
+  if (req.url === '/api/live') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(readLive()));
+    return;
+  }
+  if (req.url === '/api/config' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify(readConfig()));
+    return;
+  }
+  if (req.url === '/api/config' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 65536) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const j = JSON.parse(body || '{}');
+        const cfg = writeConfig(j);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, ...cfg, note: '已保存，重启抓取后生效（看板点“重启”即可）' }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: String(e.message || e).slice(0, 200) }));
+      }
+    });
+    return;
+  }
   if (req.url === '/api/action' && req.method === 'POST') {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
@@ -1627,7 +1773,10 @@ const server = http.createServer((req, res) => {
     return;
   }
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(HTML);
+  try {
+    const dash = fs.readFileSync(path.join(ROOT, 'web', 'dashboard.html'), 'utf8');
+    res.end(dash);
+  } catch { res.end(HTML); }
 });
 
 // 监听 0.0.0.0：手机需要在同一局域网内访问

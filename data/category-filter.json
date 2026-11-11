@@ -1,0 +1,28 @@
+{
+  "bonus": 20,
+  "enabled": true,
+  "keywords": [
+    "母婴",
+    "婴童",
+    "宝宝",
+    "婴儿",
+    "奶粉",
+    "纸尿裤",
+    "尿不湿",
+    "童装",
+    "童鞋",
+    "辅食",
+    "婴儿车",
+    "儿童",
+    "妈妈",
+    "宝妈",
+    "孕妇",
+    "育儿",
+    "亲子"
+  ],
+  "mode": "only",
+  "note": "mode=only 时只盯标题或主播名含关键词的直播间；mode=off 时不过滤。关键词覆盖婴童/母婴/小孩相关：母婴、婴童、宝宝、婴儿、奶粉、纸尿裤、童装、童鞋、辅食、婴儿车、儿童、妈妈、宝妈、孕妇、育儿、亲子。noThreshold=true 时进房间不设门槛、不分白天晚间；preferSmallRooms=true 时人数越少排序越靠前；skipFansGroup=true 时不抢要花抖币的粉丝团福袋，只抢关注型和发弹幕型。游戏和 VIP 不加分。网页看板可改，改完重启抓取生效。",
+  "noThreshold": true,
+  "preferSmallRooms": true,
+  "skipFansGroup": true
+}

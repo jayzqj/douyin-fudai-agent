@@ -65,6 +65,35 @@ const MIN_ONLINE_NIGHT=Number(process.env.DY_MIN_ONLINE_NIGHT||_THR.night);
 const VIP_EXEMPT=!!_THR.vipExempt;
 const NIGHT_START=Number(process.env.DY_NIGHT_START||_THR.nightStart);
 const NIGHT_END=Number(process.env.DY_NIGHT_END||_THR.nightEnd);
+// 🧒 婴童用品过滤（2026-11-11 新增）：只盯指定类型直播间。
+//    单一数据源 data/category-filter.json，与看板共用，网页可改。
+//    mode='only' 时，只保留标题或主播名含关键词的房间；mode='off' 时不过滤。
+//    注意：抖音网页分类页没有可靠的「母婴」分类 ID，所以用标题/主播名关键词过滤，
+//    比分类 ID 更可靠。婴童房多为带货，见 roomScore：命中关键词时不扣带货分、反而加分。
+const _CATF_DEFAULT={enabled:true,mode:'only',keywords:['母婴','婴童','宝宝','婴儿','奶粉','纸尿裤','尿不湿','童装','童鞋','辅食','婴儿车','儿童','妈妈','宝妈','孕妇','育儿','亲子'],bonus:20,noThreshold:true,preferSmallRooms:true,skipFansGroup:true};
+let _CATF={..._CATF_DEFAULT};
+let _CATF_MTIME=0;
+function loadCategoryFilter(){
+  try{
+    const st=fs.statSync(DATA_DIR+'/category-filter.json');
+    if(st.mtimeMs===_CATF_MTIME) return _CATF;
+    _CATF_MTIME=st.mtimeMs;
+    const j=JSON.parse(fs.readFileSync(DATA_DIR+'/category-filter.json','utf8'))||{};
+    const kws=Array.isArray(j.keywords)?j.keywords.map(x=>String(x||'').trim()).filter(Boolean):[];
+    _CATF={enabled:j.enabled!==false, mode:(j.mode==='off'?'off':'only'), keywords:kws.length?kws:_CATF_DEFAULT.keywords, bonus:Math.max(0,Math.min(50,Number(j.bonus)||20)), noThreshold:j.noThreshold!==false, preferSmallRooms:j.preferSmallRooms!==false, skipFansGroup:j.skipFansGroup!==false};
+  }catch(e){}
+  return _CATF;
+}
+function matchesCategory(host,title){
+  const f=loadCategoryFilter();
+  if(!f.enabled || f.mode!=='only') return false;
+  // 🧒 排除误伤：主播名含「宝宝」但标题是游戏的（例如「旭旭宝宝」播王者荣耀），
+  //    不能算婴童房。标题明确是强游戏类时直接判非婴童。
+  if(/金铲铲|王者荣耀|和平精英|三角洲行动|英雄联盟|无畏契约|永劫无间|蛋仔派对|第五人格|原神|崩坏|绝区零/i.test(title||'')) return false;
+  const t=((host||'')+' '+(title||'')).toLowerCase();
+  return f.keywords.some(k=>k && t.includes(String(k).toLowerCase()));
+}
+function isCategoryFilterOn(){ const f=loadCategoryFilter(); return !!(f.enabled && f.mode==='only'); }
 
 // ⏱ 等待时间单一数据源：data/wait-config.json（2026-11-04 用户要求「等待发福袋时间砍半」）。
 //    scale 统一作用于「常驻时长 / 无福袋提前换房 / 空轮退避」三类等待。
@@ -226,8 +255,10 @@ const DANMU_BAD=/恭喜|中奖|获奖|获得.{0,8}(奖|福袋|红包|礼)|奖品
     return t;
   }
 function getMinOnline(){
+  // 🧒 2026-11-11 用户定稿：不分白天晚间、进房间不设门槛。
+  //    noThreshold=true 时一律返回 0，入池、进房、福袋出现时的门槛硬卡全部失效。
+  if(loadCategoryFilter().noThreshold) return 0;
   const h=new Date().getHours();
-  // 晚间 19:00-24:00 用高门槛，凌晨 0-6 点按白天算（人少但仍在播）
   const isNight = (h>=NIGHT_START && h<NIGHT_END);
   return isNight ? MIN_ONLINE_NIGHT : MIN_ONLINE_DAY;
 }
@@ -285,15 +316,33 @@ const SALES_PAT = /专场|破价|品牌|秒杀|福利|优惠|券|双11|双十一
 function roomScore(host, title, online, isVip){
   let sc = 0;
   const t = (host||'') + ' ' + (title||'');
-  if(GAME_STRONG_PAT.test(t)) sc += 15;   // 明确游戏类
-  else if(GAME_PAT.test(t)) sc += 8;      // 疑似游戏/娱乐类
-  if(SALES_PAT.test(t)) sc -= 10;     // 带货类靠后
-  if(isVip) sc += 12;                 // 历史发过福袋（原 20 过高：实测 VIP 房占 33% 常驻却几乎不出福袋）
+  const _infant=matchesCategory(host, title);
+  if(_infant) sc += loadCategoryFilter().bonus; // 婴童房加分
+  // 🧒 2026-11-11 用户定稿：不要游戏和 VIP，分数打低。
+  //    游戏类原来 +15/+8，现在反过来扣分；VIP 原来 +12，现在不加分。
+  //    婴童/母婴/小孩相关房靠 +20 婴童分 + 小房分排前面，游戏 VIP 房排后面。
+  //    注意：采集口已按关键词过滤，游戏房本来就进不了池，这里是给
+  //    「名字未知、靠探测进来的历史 VIP 房」兜底用的。
+  if(GAME_STRONG_PAT.test(t) && !_infant) sc -= 10;   // 明确游戏类，扣分
+  else if(GAME_PAT.test(t) && !_infant) sc -= 5;      // 疑似游戏/娱乐类，扣分
+  if(SALES_PAT.test(t) && !_infant) sc -= 10;     // 带货类靠后（婴童房不扣：婴童基本都是带货）
+  // if(isVip) sc += 12;  // 已取消：VIP 不再加分
 
-  // 🕐 分时段的房间规模偏好（来自历史数据实测）
-  //    凌晨 0-6 点：可抢福袋集中在 2000-6000 人的中型房（中位 2259~5560）
-  //    晚间 19-24 点：几乎全是 10 万人的大型房
-  //    白天：温和偏好大房间
+  // 🧒 人数越少越优先（2026-11-11 用户定稿）：同一个福袋中奖名额固定时，
+  //    参与人数越少，单人中奖率越高。所以小房加分、大房不加分，取代原来的
+  //    「分时段偏好大房」逻辑。注意代价：小房发福袋的频率和奖品通常也更低，
+  //    只是单次中奖率更高，不是每小时总收益一定更高。
+  if(loadCategoryFilter().preferSmallRooms){
+    if(online>=0){
+      if(online<100) sc+=15;
+      else if(online<500) sc+=12;
+      else if(online<1000) sc+=10;
+      else if(online<5000) sc+=6;
+      else if(online<20000) sc+=2;
+    }
+    return sc;
+  }
+  // 原版：分时段偏好大房（preferSmallRooms=false 时恢复）
   const hh = new Date().getHours();
   if(hh >= NIGHT_START && hh < NIGHT_END){
     if(online >= 50000) sc += 5;
@@ -342,6 +391,50 @@ const rec=(o)=>{
   // 无法按账号过滤、只能整文件统计，和全局 participations 口径打架。
   try{ fs.appendFileSync(RES, JSON.stringify({...o,account:ACCOUNT_TAG,at:now})+'\n'); }catch{}
 };
+// ── 🧒 看板实时状态（2026-11-11 新增，v4 看板用）─────────────────────
+//    旧看板只能从日志尾部反查「当前房间」，没有「所有监控过的房间」和
+//    「正在发福袋的房间」这两张表。这里在内存里维护一张表，写到
+//    data/live-rooms.json（原子写：先写 .tmp 再 rename），看板每 5 秒读一次。
+//    福袋内容：SCAN 只能拿到倒计时（cd/sec），拿不到奖品文案；奖品/类型
+//    要等 tryJoin 点开面板后才知道，见 tryJoin 里的 panelText 采集。
+//    所以 active 表里 content 可能是空的，显示为「待打开面板确认」，
+//    不是程序漏写。倒计时用 expiresAt（发现时 sec + 发现时间）算，
+//    看板按本地时间每秒递减，即使抓取已换房，倒计时仍准（直到过期）。
+const LIVE_FILE=DATA_DIR+'/live-rooms.json';
+const _liveRooms=new Map();
+let _liveLastWrite=0;
+function fudaiTypeLabel(result){
+  const m={'joined':'已参与','maybe-joined':'已参与（待确认）','need-follow':'关注型','fans-skip-always':'粉丝团（已跳过）','fans-skip-daytime':'粉丝团（白天跳过）','fans-skip-account':'粉丝团（账号跳过）','fans-no-coins':'粉丝团（抖币不足）','packet-skipped':'人气红包（不抢）','packet-only':'人气红包','no-panel':'未打开面板'};
+  return m[result]||result||'待确认';
+}
+function upsertLiveRoom(room, patch){
+  if(!room) return;
+  const cur=_liveRooms.get(String(room))||{room:String(room),host:'',title:'',online:-1,score:0,isVip:false,visits:0,fudaiTotal:0,joinable:0,lastSeenAt:'',lastSeenTs:0,status:'monitoring',fudai:null};
+  const now=Date.now();
+  const next={...cur, ...patch, room:String(room), lastSeenTs: patch.lastSeenTs||now, lastSeenAt: patch.lastSeenAt||new Date().toISOString()};
+  if(patch.fudai===null) next.fudai=null;
+  if(patch.fudai && typeof patch.fudai==='object') next.fudai={...(cur.fudai||{}), ...patch.fudai};
+  _liveRooms.set(String(room), next);
+}
+function writeLiveState(force){
+  try{
+    const now=Date.now();
+    if(!force && now-_liveLastWrite<3000) return;
+    _liveLastWrite=now;
+    let anchors={};
+    try{ anchors=JSON.parse(fs.readFileSync(DATA_DIR+'/anchors.json','utf8'))||{}; }catch(e){}
+    const rooms=[..._liveRooms.values()].map(r=>{
+      const a=anchors[r.room]||{};
+      return {...r, visits:a.visits??r.visits, fudaiTotal:a.fudaiTotal??r.fudaiTotal, joinable:a.joinable??r.joinable, host:r.host||a.host||''};
+    }).sort((a,b)=>(b.lastSeenTs||0)-(a.lastSeenTs||0)).slice(0,200);
+    // 正在发福袋：fudai 在且未过期（expiresAt 未到），且 15 分钟内还见过
+    const active=rooms.filter(r=>r.fudai && r.fudai.expiresAt && r.fudai.expiresAt>now && (now-(r.lastSeenTs||0))<15*60*1000);
+    const out={updatedAt:new Date().toISOString(), updatedTs:now, rooms, active};
+    fs.writeFileSync(LIVE_FILE+'.tmp', JSON.stringify(out));
+    fs.renameSync(LIVE_FILE+'.tmp', LIVE_FILE);
+  }catch(e){}
+}
+
 // ── 执行能力真实记账（2026-11-05 14:10）─────────────────────
 // 看板原先用日志正则统计「粉丝团/关注成功率」，但日志跨天复用、无日期字段，
 // 且 fans-join:joinBtn（参与按钮就位）被当成加入成功，导致 24/28 86% 却 0 钻。
@@ -1519,7 +1612,16 @@ async function tryJoin(tab,f,url,online){
       // 点击后没有面板，截一张（仅首次，避免每轮 6 张堆积）
       if(pos.n==='图标中心') await shot(tab,`h35-AFTER-${url.split('/').pop()}-${pos.n}-${Date.now()}.png`);
     }
-    if(btn.cnt>0){out.steps.push('btn@'+pos.n);break;}
+    if(btn.cnt>0){
+      out.steps.push('btn@'+pos.n);
+      // 🧒 采集福袋面板文案（奖品/参与条件），看板「福袋内容」用。
+      //    只在面板已打开时取一次，失败不影响参与。
+      try{
+        const pt=await ev(tab,`(()=>{var st=document.querySelector('[class*="ShortTouchContainer"]'); var t=st?(st.innerText||''):''; if(!t) t=document.body.innerText||''; return JSON.stringify(t.slice(0,200));})()`,10000);
+        if(pt && !pt.__err){ try{ out.panelText=JSON.parse(pt); }catch(e){ out.panelText=String(pt).slice(0,200); } }
+      }catch(e){}
+      break;
+    }
 
     // 🧧 人气红包（2026-11-06 10:22 用户纠正后重构，定稿「不抢人气红包」）
     //    用户原话：「红包和福袋是在一排的，福袋位置也不固定，重点是识别福袋，红包是不去抢的」。
@@ -1584,9 +1686,12 @@ async function tryJoin(tab,f,url,online){
       // 🕐 2026-11-10 11:41 增补：白天时段（非晚间）任何账号都不抢粉丝团福袋，
       //    只抢关注型与发弹幕型；晚间恢复原行为。两者为「或」关系。
       const _dayNoFans = DAY_SKIP_FANS && !isNightNow();
-      if(fans.cnt>0 && (_skipFansAcc.includes(ACCOUNT_TAG) || _dayNoFans)){
-        out.steps.push(_dayNoFans ? 'fans-skip-daytime' : 'fans-skip-account');
-        out.result = _dayNoFans ? 'fans-skip-daytime' : 'fans-skip-account';
+      // 🧒 2026-11-11 用户定稿：不抢要花抖币的粉丝团福袋，只抢关注型和发弹幕型。
+      //    skipFansGroup=true 时不分白天晚间、不分账号，一律跳过粉丝团型。
+      const _alwaysNoFans = loadCategoryFilter().skipFansGroup === true;
+      if(fans.cnt>0 && (_skipFansAcc.includes(ACCOUNT_TAG) || _dayNoFans || _alwaysNoFans)){
+        out.steps.push(_alwaysNoFans ? 'fans-skip-always' : (_dayNoFans ? 'fans-skip-daytime' : 'fans-skip-account'));
+        out.result = _alwaysNoFans ? 'fans-skip-always' : (_dayNoFans ? 'fans-skip-daytime' : 'fans-skip-account');
         return out;
       }
       if(fans.cnt>0){
@@ -1718,6 +1823,8 @@ async function tryJoin(tab,f,url,online){
   // 🎯 2026-11-10：兜底分支同样用多候选（含『点亮粉丝团』）
   const fans=await pSearchFans(tab);
   if(fans.cnt>0){
+    // 🧒 skipFansGroup=true 时兜底分支也不加入粉丝团，直接跳过，不花抖币。
+    if(loadCategoryFilter().skipFansGroup === true){ out.steps.push('fans-skip-always'); out.result='fans-skip-always'; return out; }
     // 2026-11-04 解除限制后：这里不再直接跳过，而是尝试加入粉丝团后再参与。
     // （正常路径在循环内已处理，走到这里说明面板没打开但页面有粉丝团入口）
     out.steps.push('fans-fallback');
@@ -1804,7 +1911,14 @@ const EXTRACT_ROOMS=`(()=>{
           var host='';
           var hm=txt.match(/@([^|]+)/);
           if(hm) host=hm[1].trim();
-          out.push({id, online:parseOnline(txt), host});
+          var title='';
+          for(const part of txt.split('|').map(x=>x.trim()).filter(Boolean)){
+            if(/^@/.test(part)) continue;
+            if(/^[\d.]+\s*(万|亿)?\+?$/.test(part)) continue;
+            if(part===host) continue;
+            title=part; break;
+          }
+          out.push({id, online:parseOnline(txt), host, title});
         }
         return out;
       })()`;   // 从直播列表页解析：房间ID / 在线数 / 主播名
@@ -1859,7 +1973,7 @@ async function collectRooms(tab, extra, roundNo){
         let added=0;
         if(Array.isArray(r)){
           for(const x of r){
-            if(!map.has(x.id)){ map.set(x.id,{online:x.online, host:x.host||''}); added++; }
+            if(!map.has(x.id)){ map.set(x.id,{online:x.online, host:x.host||'', title:x.title||''}); added++; }
           }
         }
         if(added===0){ noNew++; if(noNew>=3) break; } else noNew=0;
@@ -1894,17 +2008,24 @@ async function collectRooms(tab, extra, roundNo){
   await grab(tab, 'https://live.douyin.com/', 20, '首页');
   await grab(tab, `https://live.douyin.com/categorynew/${catIdx}`, 12, catLabel);
   const list=[];
-  for(const [room,info] of map.entries()) list.push({room, online:info.online, host:info.host||''});
+  for(const [room,info] of map.entries()) list.push({room, online:info.online, host:info.host||'', title:info.title||''});
   // 把采集到的主播昵称记进映射表，供日志/看板/报表显示
   for(const r of list) if(r.host) saveName(r.room, r.host);
   await flushNames();
   log('合计采集', list.length, '个直播间（含在线数）');
+  // 🧒 婴童过滤（采集口）：只留标题/主播名含关键词的房间
+  let _filtered=list;
+  if(isCategoryFilterOn()){
+    const _cf=loadCategoryFilter();
+    _filtered=list.filter(r=>matchesCategory(r.host, r.title));
+    log('🧒 婴童过滤：' + list.length + ' → ' + _filtered.length + ' 间（关键词：' + _cf.keywords.join('、') + '）');
+  }
 
   // 🧊 采集后冷却：连续导航多个页面后，紧接着加载直播间会卡在「直播加载中」，
   //    页面 innerText 只有 20 字（实测连续 8 次失败）。等 20 秒让抖音缓过来。
   //    手动验证：单独导航同一个房间 16 秒后能正常加载（len=668）。
   await sleep(20000);
-  return list;
+  return _filtered;
 }
 
 // ⚠ 等待 24 秒（原 16 秒）：实测 22 点主力房 660292215268 在 16 秒时页面还没渲染完，
@@ -1982,6 +2103,9 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       log(`\n--- 第 ${round} 轮：采集高人气直播间 ---`);
       const rooms=await collectRooms(tab, extra, round);
       log('采集到', rooms.length, '个候选');
+      // 🧒 看板：采集到的房间全部记进 live 表（监控过的房间）
+      for(const r of rooms) upsertLiveRoom(r.room, {host:r.host||'', title:r.title||'', online:r.online, status:'monitoring'});
+      writeLiveState(true);
 
       // 🎯 VIP 房间无条件优先（即使不在首页采集中）
       const VIP_FILE=ROOT+'/scripts/known-fudai-hosts.txt';
@@ -2031,7 +2155,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       const nowTs=Date.now();
       // 晚上候选房少（达标房间可能只剩 3-5 个），VIP 房重新开播的价值更高，
       // 所以晚间把冷却从 30 分钟缩到 15 分钟，更快发现高价值房间回来
-      const coolMs = isNightNow() ? 15*60*1000 : 30*60*1000;
+      const coolMs = 30*60*1000; // 🧒 不分白天晚间：探测冷却统一 30 分钟
       // 🎯 探测优先级改为「最近真的发过福袋」优先（2026-11-02 数据驱动）：
       //    数字房间号是「某一场直播」的唯一 ID，主播下播后该房间永久失效，探测只会
       //    持续返回 null（实测 660292215268 连续失败 9 次，再 6 次就会被自动淘汰出池）。
@@ -2176,7 +2300,18 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       const _q  = (_pq[ACCOUNT_TAG] && typeof _pq[ACCOUNT_TAG]==='object') ? _pq[ACCOUNT_TAG] : {pinned:2,other:3};
       const _qPin = Math.max(0, Math.min(5, Number(_q.pinned)||0));
       const _qOth = Math.max(0, Math.min(6, Number(_q.other)||0));
-      const probeList=[...pinnedNow.slice(0,_qPin), ...otherNow.slice(0,_qOth)];
+      let probeList=[...pinnedNow.slice(0,_qPin), ...otherNow.slice(0,_qOth)];
+      // 🧒 婴童过滤（探测口）：指定主播按名字过滤，非婴童指定主播不探。
+      //    历史 VIP 房名字未知，探测时先放行，入池时再按主播名/标题过滤（见 pool 段）。
+      if(isCategoryFilterOn()){
+        const _bp=probeList.length;
+        probeList=probeList.filter(v=>{
+          const nm=USER_PINNED[v] ? (USER_PINNED[v].name||'') : (NAMES[v]||'');
+          if(!nm) return true;
+          return matchesCategory(nm,'');
+        });
+        if(probeList.length!==_bp) log('🧒 婴童过滤：探测名单 ' + _bp + ' → ' + probeList.length + ' 间（非婴童指定主播已跳过）');
+      }
       if(pinnedNow.length) log(`📌 指定主播待探 ${pinnedNow.length} 个（当前 ${curH} 点，按时段优先）`);
       for(const v of probeList){
         log(`🔍 主动探测 VIP 房 ${v}`);
@@ -2298,8 +2433,15 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
         // 主动探测到的 VIP 房可能拿不到在线数，同样要纳入候选
         if(ol<0 && !isVip) continue;
         const info = rooms.find(x=>x.room===room);
-        const host = info ? (info.host||'') : '';
+        const host = info ? (info.host||'') : (NAMES[room]||'');
+        const title = info ? (info.title||'') : '';
         if(isOfficial(host)){ log(`  ⛔ ${room} 官方媒体(${host})，跳过`); continue; }
+        // 🧒 婴童过滤（入池口）：采集来的房间必须含关键词；VIP 房若主播名/标题已知且不含关键词也跳过，
+        //    名字未知（仅靠探测进来的历史 VIP）的放行，最多 3 个探路名额，不会淹没婴童池。
+        if(isCategoryFilterOn() && !matchesCategory(host, title)){
+          if(!isVip){ log(`  🧒 ${room} 非婴童（${host||title||'无标题'}），跳过`); continue; }
+          if(host||title){ log(`  🧒 ${room} VIP 非婴童（${host||title}），跳过`); continue; }
+        }
         // 🎯 2026-11-05 用户要求「按门槛硬卡」：VIP 不再享受 500 人底线豁免，
         //    一律按 day/night 门槛。是否放宽由 threshold.json 的 vipExempt 控制。
         //    ol<0 是「探测时拿不到在线数」：VIP 仍可进候选（进房后实时值在 F 值检测硬卡），
@@ -2320,7 +2462,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
           if(_unknownOnline >= 3) continue;         // VIP 也最多 3 个探路名额
           _unknownOnline++;
         }
-        pool.push({room, online:ol, isVip, host, score:roomScore(host,'',ol,isVip)});
+        pool.push({room, online:ol, isVip, host, title, score:roomScore(host,title,ol,isVip)});
       }
       // 🎯 按优先级排序：游戏/娱乐类 + VIP 优先，带货类靠后
       // 🎯 排序：VIP 优先 → 最近没去过的普通房优先 → 分数
@@ -2439,7 +2581,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
             // follow 型（全天播但长期零产出）：不封顶，让产出说话。
             // 不能加 Math.max(0,...) 下限：金矿房 goldN 奖励会把 p 压成负数，
             // 归零等于抹掉「历史抢到过 45 次」的优势，把它们和普通房拉平。
-            p = p + recentPen - 12;
+            p = p + recentPen;  // 🧒 2026-11-11：VIP 基础信任 -12 已取消，VIP 不再加分
           }
         }
         return x.score - p;
@@ -2699,6 +2841,17 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
           const d=await ev(tab,SCAN,20000);
           if(!d||d.__err){ await sleep(2000); continue; }
           if(d.exited){ log('已退出'); break; }
+          // 🧒 看板：每次扫描都更新该房间的在线数和福袋状态
+          try{
+            if(d.fudai){
+              const sec=(typeof d.fudai.sec==='number' && d.fudai.sec>=0) ? d.fudai.sec : -1;
+              upsertLiveRoom(g.room, {online:d.online, title:d.title||g.title||'', status:'fudai',
+                fudai:{cd:d.fudai.cd||'', sec, expiresAt: sec>=0 ? Date.now()+sec*1000 : 0, type:'待确认', content:''}});
+            }else{
+              upsertLiveRoom(g.room, {online:d.online, title:d.title||g.title||'', status:'monitoring'});
+            }
+            writeLiveState(false);
+          }catch(e){}
           // 🔁 守完开奖后，只有观察到旧福袋图标确实消失 candCount===0 才解锁去重。
           //    不做「超时兜底解锁」：若旧图标赖着不消失，超时解锁会把同一个旧福袋再抢一次，
           //    重复抢比漏一轮更糟。真出现「无缝衔接」时本轮自然到期换房，下一轮重进仍会扫到新福袋。
@@ -2863,6 +3016,13 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
               // packet-only 是「这个位置是红包」的中间态，不写参与记录、不写长窗，
               //   继续找同排的福袋；否则一条 packet-only 会污染统计并锁死真福袋。
               if(r.result==='packet-only'){ _packetOnly++; r=null; continue; }
+              // 🧒 看板：把这次福袋的类型/内容/结果写进 live 表
+              try{
+                const _f=d.fudai;
+                upsertLiveRoom(g.room, {status: (r.result==='joined'||r.result==='maybe-joined')?'joined':'fudai',
+                  fudai: _f ? {cd:_f.cd||'', sec:_f.sec??-1, expiresAt: (typeof _f.sec==='number'&&_f.sec>=0)?Date.now()+_f.sec*1000:0, type:fudaiTypeLabel(r.result), content:(r.panelText||'').replace(/\n/g,' ').slice(0,120), result:r.result} : null});
+                writeLiveState(true);
+              }catch(e){}
               rec(r);
               if(r.result==='joined'||r.result==='maybe-joined') break;
             }
